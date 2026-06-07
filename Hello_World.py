@@ -1,9 +1,11 @@
 import sys
+import random
 from PyQt6.QtWidgets import QGraphicsOpacityEffect
 from PyQt6.QtCore import (
     QPropertyAnimation,
     QEasingCurve,
     QRect,
+    QTimer,
     Qt,
     QParallelAnimationGroup
 )
@@ -150,9 +152,175 @@ class SeaBattle(QWidget):
         self.selected_size = None
         self.horizontal = True
         self.preview_buttons = []
+        self.turn_time = 60
+        self.timer = None
 
         self.init_ui()
         self.update_cell_size()
+
+    def random_shot(self):
+
+        if self.phase != "battle":
+            return
+
+        buttons = (
+            self.p2_buttons
+            if self.current_player == 1
+            else self.p1_buttons
+        )
+
+        hits = (
+            self.p2_hits
+            if self.current_player == 1
+            else self.p1_hits
+        )
+
+        available = [
+            cell
+            for cell in buttons.keys()
+            if cell not in hits
+        ]
+
+        if not available:
+            return
+
+        x, y = random.choice(available)
+
+        self.attack(x, y)
+
+    def start_turn_timer(self):
+
+        self.turn_time = 60
+
+        if self.timer:
+            self.timer.stop()
+
+        self.timer = QTimer()
+
+        self.timer.timeout.connect(
+            self.update_timer
+        )
+
+        self.timer.start(1000)
+
+        self.update_timer_label()
+
+    def update_timer(self):
+
+        self.turn_time -= 1
+
+        self.update_timer_label()
+
+        if self.turn_time <= 0:
+
+            self.timer.stop()
+
+            self.switch_turn()
+
+            self.start_turn_timer()
+
+    def update_timer_label(self):
+
+        minutes = self.turn_time // 60
+        seconds = self.turn_time % 60
+
+        self.timer_label.setText(
+            f"{minutes:02}:{seconds:02}"
+        )
+
+    def alive_ships_count(self, ships, hits):
+
+        visited = set()
+        alive = 0
+
+        for cell in ships:
+
+            if cell in visited:
+              continue
+
+            ship = self.get_ship_from_cell(
+                cell,
+                ships
+            )
+
+            visited.update(ship)
+
+            if not ship.issubset(hits):
+                alive += 1
+
+        return alive
+
+    def update_fleet_info(self):
+
+        p1_left = len(self.p1_ships - self.p1_hits)
+        p2_left = len(self.p2_ships - self.p2_hits)
+
+        self.player_fleet_label.setText(
+            "■ " * p1_left
+        )
+
+        self.enemy_fleet_label.setText(
+            "■ " * p2_left
+        )
+
+    # =====================================================
+    # ПОИСК УНИЧТОЖЕННОГО КОРАБЛЯ
+    # =====================================================
+
+    def get_ship_from_cell(self, cell, ships):
+
+        visited = set()
+        stack = [cell]
+
+        while stack:
+            c = stack.pop()
+
+            if c in visited:
+                continue
+
+            visited.add(c)
+
+            x, y = c
+
+            for nx, ny in [
+                (x - 1, y),
+                (x + 1, y),
+                (x, y - 1),
+                (x, y + 1)
+            ]:
+                if (nx, ny) in ships and (nx, ny) not in visited:
+                    stack.append((nx, ny))
+
+        return visited
+
+
+# =====================================================
+# КОРАБЛЬ УНИЧТОЖЕН?
+# =====================================================
+
+    def is_ship_destroyed(self, ship_cells, hits):
+
+        return ship_cells.issubset(hits)
+
+
+# =====================================================
+# ОТМЕТИТЬ КЛЕТКИ ВОКРУГ КОРАБЛЯ
+# =====================================================
+
+    def mark_around_ship(self, ship_cells, hits):
+
+        for x, y in ship_cells:
+
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+
+                    nx = x + dx
+                    ny = y + dy
+
+                    if 0 <= nx < SIZE and 0 <= ny < SIZE:
+
+                        if (nx, ny) not in ship_cells:
+                            hits.add((nx, ny))
 
     def resizeEvent(self, event):
         self.update_cell_size()
@@ -220,7 +388,132 @@ class SeaBattle(QWidget):
 
         body = QHBoxLayout()
         main.addLayout(body)
-        main.addStretch(2)
+
+        # =================================================
+        # ПАНЕЛЬ БОЯ
+        # =================================================
+
+        self.battle_panel = QWidget()
+
+        self.battle_panel.setStyleSheet("""
+            QWidget {
+                border: 1px solid gray;
+                background: #1e1e1e;
+            }
+        """)
+
+        battle_layout = QHBoxLayout(self.battle_panel)
+
+        # =================================================
+        # ЛЕВАЯ ЧАСТЬ
+        # =================================================
+
+        left_panel = QWidget()
+        left_layout = QHBoxLayout(left_panel)
+
+        self.random_shot_btn = QPushButton(
+            "Случайный выстрел"
+        )
+
+        self.random_shot_btn.setFixedSize(180, 50)
+
+        left_layout.addWidget(self.random_shot_btn)
+
+        timer_text = QLabel("Осталось\nвремени:")
+
+        timer_text.setAlignment(
+            Qt.AlignmentFlag.AlignCenter
+        )
+
+        left_layout.addWidget(timer_text)
+
+        self.timer_label = QLabel("01:00")
+
+        self.timer_label.setAlignment(
+            Qt.AlignmentFlag.AlignCenter
+        )
+
+        self.timer_label.setFixedSize(120, 60)
+
+        self.timer_label.setStyleSheet("""
+            QLabel {
+            border: 2px solid black;
+            font-size: 28px;
+            font-weight: bold;
+            background: #1e1e1e;
+            }
+        """)
+
+        left_layout.addWidget(self.timer_label)
+
+        battle_layout.addWidget(left_panel, 2)
+
+        # =================================================
+        # ВАШ ФЛОТ
+        # =================================================
+
+        player_group = QWidget()
+
+        player_layout = QVBoxLayout(player_group)
+
+        player_title = QLabel("Ваш флот")
+        player_title.setAlignment(
+        Qt.AlignmentFlag.AlignCenter
+        )
+
+        player_layout.addWidget(player_title)
+
+        self.player_fleet_label = QLabel()
+
+        self.player_fleet_label.setAlignment(
+            Qt.AlignmentFlag.AlignCenter
+        )
+
+        self.player_fleet_label.setStyleSheet("""
+            font-size: 18px;
+        """)
+
+        player_layout.addWidget(
+            self.player_fleet_label
+        )
+
+        battle_layout.addWidget(player_group)
+
+        # =================================================
+        # ФЛОТ ПРОТИВНИКА
+        # =================================================
+
+        enemy_group = QWidget()
+
+        enemy_layout = QVBoxLayout(enemy_group)
+
+        enemy_title = QLabel("Флот противника")
+
+        enemy_title.setAlignment(
+            Qt.AlignmentFlag.AlignCenter
+        )
+
+        enemy_layout.addWidget(enemy_title)
+
+        self.enemy_fleet_label = QLabel()
+
+        self.enemy_fleet_label.setAlignment(
+            Qt.AlignmentFlag.AlignCenter
+        )
+
+        self.enemy_fleet_label.setStyleSheet("""
+            font-size: 18px;
+        """)
+
+        enemy_layout.addWidget(
+            self.enemy_fleet_label
+        )
+
+        battle_layout.addWidget(enemy_group)
+
+        self.battle_panel.hide()
+
+        main.addWidget(self.battle_panel)
 
         # =================================================
         # КОНТЕЙНЕР ДЛЯ ДВУХ ПОЛЕЙ
@@ -356,6 +649,9 @@ class SeaBattle(QWidget):
 
         self.update_info()
         self.update_cell_size()
+        self.random_shot_btn.clicked.connect(
+            self.random_shot
+        )
 
     # =====================================================
     # ИНФО
@@ -519,14 +815,22 @@ class SeaBattle(QWidget):
 
         for x, y in cells:
 
+            # выход за поле
             if x < 0 or y < 0:
                 return False
 
             if x >= SIZE or y >= SIZE:
                 return False
 
-            if (x, y) in field:
-                return False
+            # проверяем саму клетку и все соседние
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+
+                    nx = x + dx
+                    ny = y + dy
+
+                    if (nx, ny) in field:
+                        return False
 
         return True
 
@@ -750,6 +1054,14 @@ class SeaBattle(QWidget):
 
             if (x, y) in self.p2_ships:
 
+                ship = self.get_ship_from_cell(
+                    (x, y),
+                    self.p2_ships
+                )
+
+                if self.is_ship_destroyed(ship, self.p2_hits):
+                    self.mark_around_ship(ship, self.p2_hits)
+
                 btn.setText("X")
 
                 btn.setStyleSheet("""
@@ -782,11 +1094,19 @@ class SeaBattle(QWidget):
 
             if (x, y) in self.p1_ships:
 
+                ship = self.get_ship_from_cell(
+                (x, y),
+                self.p1_ships
+                )
+
+                if self.is_ship_destroyed(ship, self.p1_hits):
+                    self.mark_around_ship(ship, self.p1_hits)
+
                 btn.setText("X")
 
                 btn.setStyleSheet("""
-                    background-color: red;
-                    border: 1px solid black;
+                background-color: red;
+                border: 1px solid black;
                 """)
 
             else:
@@ -815,6 +1135,8 @@ class SeaBattle(QWidget):
 
         self.current_player = 2 if self.current_player == 1 else 1
         self.update_field_access()
+        self.start_turn_timer()
+        self.update_fleet_info()
 
     # =====================================================
     # ДОСТУП К ПОЛЯМ
@@ -890,6 +1212,10 @@ class SeaBattle(QWidget):
 
             self.ships_container.hide()
             self.phase = "battle"
+            
+            self.battle_panel.show()
+            self.update_fleet_info()
+            self.start_turn_timer()
 
             self.animate_fields_to_center()
 
