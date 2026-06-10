@@ -21,18 +21,12 @@ from PyQt6.QtWidgets import (
 )
 SIZE = 10
 
-# количество кораблей
 SHIP_TYPES = {
     4: 1,
     3: 2,
     2: 3,
     1: 4
 }
-
-
-# =========================================================
-# КЛЕТКА
-# =========================================================
 
 class CellButton(QPushButton):
 
@@ -73,10 +67,6 @@ class CellButton(QPushButton):
 )
 
 
-# =========================================================
-# КНОПКА КОРАБЛЯ
-# =========================================================
-
 class ShipButton(QPushButton):
 
     def __init__(self, size_ship, parent):
@@ -93,6 +83,7 @@ class ShipButton(QPushButton):
         self.setStyleSheet("""
             QPushButton {
                 background-color: #d0d0d0;
+                color: #062743;
                 font-size: 16px;
                 text-align: left;
                 padding-left: 15px;
@@ -121,25 +112,29 @@ class ShipButton(QPushButton):
 
         self.parent_window.select_ship(self)
 
-
-# =========================================================
-# ИГРА
-# =========================================================
-
 class SeaBattle(QWidget):
 
     def __init__(self):
         super().__init__()
 
+        dark_palette = """
+        QWidget { background-color: #1e1e1e; color: #e0e0e0; }
+        QGridLayout, QHBoxLayout, QVBoxLayout { background-color: #1e1e1e; }
+        /* добавь остальные нужные виджеты */
+        """
+        self.setStyleSheet(dark_palette)
+
         self.setWindowTitle("Морской бой")
 
-        # --- ВАЖНО: создаём ДО UI ---
         self.p1_buttons = {}
         self.p2_buttons = {}
         self.cell_size = 40
 
         self.p1_ships = set()
         self.p2_ships = set()
+
+        self.p1_ship_list = []
+        self.p2_ship_list = []
 
         self.p1_hits = set()
         self.p2_hits = set()
@@ -252,21 +247,48 @@ class SeaBattle(QWidget):
 
     def update_fleet_info(self):
 
-        p1_left = len(self.p1_ships - self.p1_hits)
-        p2_left = len(self.p2_ships - self.p2_hits)
+        player_lines = []
+        enemy_lines = []
+
+
+        for ship in sorted(
+            self.p1_ship_list,
+            key=len,
+            reverse=True
+        ):
+
+            destroyed = ship.issubset(self.p1_hits)
+
+            symbol = "⊠" if destroyed else "■"
+
+            player_lines.append(
+                symbol * len(ship)
+            )
+
+
+        for ship in sorted(
+            self.p2_ship_list,
+            key=len,
+            reverse=True
+        ):
+
+            destroyed = ship.issubset(self.p2_hits)
+
+            symbol = "⊠" if destroyed else "■"
+
+            enemy_lines.append(
+                symbol * len(ship)
+            )
 
         self.player_fleet_label.setText(
-            "■ " * p1_left
+            " ".join(player_lines)
         )
 
         self.enemy_fleet_label.setText(
-            "■ " * p2_left
+            " ".join(enemy_lines)
         )
 
-    # =====================================================
     # ПОИСК УНИЧТОЖЕННОГО КОРАБЛЯ
-    # =====================================================
-
     def get_ship_from_cell(self, cell, ships):
 
         visited = set()
@@ -293,19 +315,9 @@ class SeaBattle(QWidget):
 
         return visited
 
-
-# =====================================================
-# КОРАБЛЬ УНИЧТОЖЕН?
-# =====================================================
-
     def is_ship_destroyed(self, ship_cells, hits):
 
         return ship_cells.issubset(hits)
-
-
-# =====================================================
-# ОТМЕТИТЬ КЛЕТКИ ВОКРУГ КОРАБЛЯ
-# =====================================================
 
     def mark_around_ship(self, ship_cells, hits):
 
@@ -360,16 +372,12 @@ class SeaBattle(QWidget):
         )
 
         self.spacing_anim.start()
-    # =====================================================
-    # UI
-    # =====================================================
 
+    # UI
     def init_ui(self):
 
         main = QVBoxLayout()
         self.setLayout(main)
-
-        # ---------------- информация ----------------
 
         self.info = QLabel()
         self.info.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -382,17 +390,11 @@ class SeaBattle(QWidget):
         main.addWidget(self.info)
         main.addStretch(1)
 
-        # =================================================
         # ОСНОВНОЙ КОНТЕЙНЕР
-        # =================================================
-
         body = QHBoxLayout()
         main.addLayout(body)
 
-        # =================================================
         # ПАНЕЛЬ БОЯ
-        # =================================================
-
         self.battle_panel = QWidget()
 
         self.battle_panel.setStyleSheet("""
@@ -403,10 +405,6 @@ class SeaBattle(QWidget):
         """)
 
         battle_layout = QHBoxLayout(self.battle_panel)
-
-        # =================================================
-        # ЛЕВАЯ ЧАСТЬ
-        # =================================================
 
         left_panel = QWidget()
         left_layout = QHBoxLayout(left_panel)
@@ -448,15 +446,11 @@ class SeaBattle(QWidget):
 
         battle_layout.addWidget(left_panel, 2)
 
-        # =================================================
-        # ВАШ ФЛОТ
-        # =================================================
-
         player_group = QWidget()
 
         player_layout = QVBoxLayout(player_group)
 
-        player_title = QLabel("Ваш флот")
+        player_title = QLabel("Флот 1 игрока")
         player_title.setAlignment(
         Qt.AlignmentFlag.AlignCenter
         )
@@ -479,15 +473,11 @@ class SeaBattle(QWidget):
 
         battle_layout.addWidget(player_group)
 
-        # =================================================
-        # ФЛОТ ПРОТИВНИКА
-        # =================================================
-
         enemy_group = QWidget()
 
         enemy_layout = QVBoxLayout(enemy_group)
 
-        enemy_title = QLabel("Флот противника")
+        enemy_title = QLabel("Флот 2 игрока")
 
         enemy_title.setAlignment(
             Qt.AlignmentFlag.AlignCenter
@@ -515,9 +505,7 @@ class SeaBattle(QWidget):
 
         main.addWidget(self.battle_panel)
 
-        # =================================================
         # КОНТЕЙНЕР ДЛЯ ДВУХ ПОЛЕЙ
-        # =================================================
         body.addStretch(1)
 
         self.fields_wrapper = QWidget()
@@ -536,10 +524,6 @@ class SeaBattle(QWidget):
 
         body.addWidget(self.fields_wrapper)
         body.addStretch(1)
-
-        # =================================================
-        # ПОЛЕ ИГРОКА 1
-        # =================================================
 
         self.p1_container = QWidget()
         p1_layout = QVBoxLayout(self.p1_container)
@@ -561,10 +545,6 @@ class SeaBattle(QWidget):
 
         self.fields_layout.addWidget(self.p1_container)
 
-        # =================================================
-        # ПОЛЕ ИГРОКА 2
-        # =================================================
-
         self.p2_container = QWidget()
         p2_layout = QVBoxLayout(self.p2_container)
 
@@ -584,10 +564,6 @@ class SeaBattle(QWidget):
         p2_layout.addLayout(self.p2_grid)
 
         self.fields_layout.addWidget(self.p2_container)
-
-        # =================================================
-        # ПАНЕЛЬ КОРАБЛЕЙ
-        # =================================================
 
         ships_layout = QVBoxLayout()
 
@@ -628,10 +604,6 @@ class SeaBattle(QWidget):
 
         body.addWidget(self.ships_container)
 
-        # =================================================
-        # СОЗДАНИЕ КНОПОК
-        # =================================================
-
         for x in range(SIZE):
             for y in range(SIZE):
 
@@ -653,10 +625,6 @@ class SeaBattle(QWidget):
             self.random_shot
         )
 
-    # =====================================================
-    # ИНФО
-    # =====================================================
-
     def update_info(self):
 
         if self.phase == "placement":
@@ -677,10 +645,6 @@ class SeaBattle(QWidget):
                 f"Ход игрока {self.current_player}"
             )
 
-    # =====================================================
-    # ВЫБОР КОРАБЛЯ
-    # =====================================================
-
     def select_ship(self, button):
 
         self.selected_size = button.size_ship
@@ -690,6 +654,7 @@ class SeaBattle(QWidget):
             btn.setStyleSheet("""
                 QPushButton {
                     background-color: #d0d0d0;
+                    color: #062743;
                     font-size: 16px;
                     text-align: left;
                     padding-left: 15px;
@@ -698,16 +663,13 @@ class SeaBattle(QWidget):
 
         button.setStyleSheet("""
             QPushButton {
-                background-color: lightgreen;
+                background-color: #1DCD9F;
+                color: #062743;
                 font-size: 16px;
                 text-align: left;
                 padding-left: 15px;
             }
         """)
-
-    # =====================================================
-    # ПОВОРОТ
-    # =====================================================
 
     def keyPressEvent(self, event):
 
@@ -716,10 +678,6 @@ class SeaBattle(QWidget):
             self.horizontal = not self.horizontal
 
             self.update_info()
-
-    # =====================================================
-    # ПОЛУЧИТЬ ТЕКУЩЕЕ ПОЛЕ
-    # =====================================================
 
     def current_field(self):
 
@@ -735,9 +693,6 @@ class SeaBattle(QWidget):
 
         return self.p2_buttons
 
-    # =====================================================
-    # PREVIEW
-    # =====================================================
 
     def hover_cell(self, x, y):
 
@@ -788,10 +743,6 @@ class SeaBattle(QWidget):
 
         self.repaint_ships()
 
-    # =====================================================
-    # КООРДИНАТЫ КОРАБЛЯ
-    # =====================================================
-
     def get_ship_cells(self, x, y, size):
 
         cells = []
@@ -805,24 +756,18 @@ class SeaBattle(QWidget):
 
         return cells
 
-    # =====================================================
-    # ПРОВЕРКА УСТАНОВКИ
-    # =====================================================
-
     def can_place(self, cells):
 
         field = self.current_field()
 
         for x, y in cells:
 
-            # выход за поле
             if x < 0 or y < 0:
                 return False
 
             if x >= SIZE or y >= SIZE:
                 return False
 
-            # проверяем саму клетку и все соседние
             for dx in (-1, 0, 1):
                 for dy in (-1, 0, 1):
 
@@ -834,10 +779,6 @@ class SeaBattle(QWidget):
 
         return True
 
-    # =====================================================
-    # КЛИК
-    # =====================================================
-
     def cell_clicked(self, x, y):
 
         if self.phase == "placement":
@@ -846,10 +787,6 @@ class SeaBattle(QWidget):
             return
 
         self.attack(x, y)
-
-    # =====================================================
-    # УСТАНОВКА КОРАБЛЯ
-    # =====================================================
 
     def place_ship(self, x, y):
 
@@ -872,6 +809,11 @@ class SeaBattle(QWidget):
         for cell in cells:
             field.add(cell)
 
+        if self.current_player == 1:
+            self.p1_ship_list.append(set(cells))
+        else:
+            self.p2_ship_list.append(set(cells))
+
         self.remaining_ships[self.selected_size] -= 1
 
         self.ship_buttons[self.selected_size].update_text()
@@ -884,10 +826,8 @@ class SeaBattle(QWidget):
 
         self.clear_preview()
 
-        # все корабли расставлены
         if all(v == 0 for v in self.remaining_ships.values()):
 
-            # игрок 2
             if self.current_player == 1:
 
                 QMessageBox.information(
@@ -926,10 +866,6 @@ class SeaBattle(QWidget):
 
                 self.update_info()
 
-    # =====================================================
-    # ОЧИСТКА ПОЛЯ
-    # =====================================================
-
     def clear_board_visual(self):
 
         for btn in self.p1_buttons.values():
@@ -950,19 +886,12 @@ class SeaBattle(QWidget):
                 border: 1px solid black;
             """)
 
-    # =====================================================
-    # ПЕРЕРИСОВКА
-    # =====================================================
-
     def repaint_ships(self):
 
         self.clear_board_visual()
 
-        # ---------------- РАССТАНОВКА ----------------
-
         if self.phase == "placement":
 
-            # игрок 1 видит свои корабли
             if self.current_player == 1:
 
                 for x, y in self.p1_ships:
@@ -972,7 +901,6 @@ class SeaBattle(QWidget):
                         border: 1px solid black;
                     """)
 
-            # игрок 2 видит свои корабли
             else:
 
                 for x, y in self.p2_ships:
@@ -981,8 +909,6 @@ class SeaBattle(QWidget):
                         background-color: gray;
                         border: 1px solid black;
                     """)
-
-        # ---------------- БОЙ ----------------
 
         else:
 
@@ -1004,7 +930,8 @@ class SeaBattle(QWidget):
                     btn.setText("•")
 
                     btn.setStyleSheet("""
-                        background-color: lightblue;
+                        background-color: #1B56FD;
+                        color: #FFFCFB;
                         border: 1px solid black;
                     """)
 
@@ -1026,13 +953,10 @@ class SeaBattle(QWidget):
                     btn.setText("•")
 
                     btn.setStyleSheet("""
-                        background-color: lightblue;
+                        background-color: #1B56FD;
+                        color: #FFFCFB;
                         border: 1px solid black;
                     """)
-
-    # =====================================================
-    # АТАКА
-    # =====================================================
 
     def attack(self, x, y):
 
@@ -1040,8 +964,6 @@ class SeaBattle(QWidget):
             return
 
         enemy = 2 if self.current_player == 1 else 1
-
-        # ---------------- атака игрока 1 ----------------
 
         if enemy == 2:
 
@@ -1074,14 +996,13 @@ class SeaBattle(QWidget):
                 btn.setText("•")
 
                 btn.setStyleSheet("""
-                    background-color: lightblue;
+                    background-color: #1B56FD;
+                    color: #FFFCFB;
                     border: 1px solid black;
                 """)
 
                 self.switch_turn()
                 self.update_field_access()
-
-        # ---------------- атака игрока 2 ----------------
 
         else:
 
@@ -1114,7 +1035,8 @@ class SeaBattle(QWidget):
                 btn.setText("•")
 
                 btn.setStyleSheet("""
-                    background-color: lightblue;
+                    background-color: #1B56FD;
+                    color: #FFFCFB;
                     border: 1px solid black;
                 """)
 
@@ -1127,10 +1049,6 @@ class SeaBattle(QWidget):
 
         self.update_info()
 
-    # =====================================================
-    # СМЕНА ХОДА
-    # =====================================================
-
     def switch_turn(self):
 
         self.current_player = 2 if self.current_player == 1 else 1
@@ -1138,16 +1056,11 @@ class SeaBattle(QWidget):
         self.start_turn_timer()
         self.update_fleet_info()
 
-    # =====================================================
-    # ДОСТУП К ПОЛЯМ
-    # =====================================================
-
     def update_field_access(self):
 
         if self.phase == "placement":
             return
 
-        # игрок 1 стреляет по полю игрока 2
         if self.current_player == 1:
 
             for btn in self.p1_buttons.values():
@@ -1156,7 +1069,6 @@ class SeaBattle(QWidget):
             for btn in self.p2_buttons.values():
                 btn.setEnabled(True)
 
-        # игрок 2 стреляет по полю игрока 1
         else:
 
             for btn in self.p2_buttons.values():
@@ -1165,13 +1077,8 @@ class SeaBattle(QWidget):
             for btn in self.p1_buttons.values():
                 btn.setEnabled(True)
 
-    # =====================================================
-    # ПОБЕДА
-    # =====================================================
-
     def check_win(self):
 
-        # игрок 1 победил
         if self.p2_ships.issubset(self.p2_hits):
 
             QMessageBox.information(
@@ -1183,7 +1090,6 @@ class SeaBattle(QWidget):
             QApplication.quit()
             return True
 
-        # игрок 2 победил
         if self.p1_ships.issubset(self.p1_hits):
 
             QMessageBox.information(
@@ -1227,13 +1133,12 @@ class SeaBattle(QWidget):
         self.ships_anim.finished.connect(finish)
         self.ships_anim.start()
 
-# =========================================================
-# ЗАПУСК
-# =========================================================
 
 if __name__ == "__main__":
 
     app = QApplication(sys.argv)
+
+    app.setStyle("Fusion")
 
     window = SeaBattle()
 
