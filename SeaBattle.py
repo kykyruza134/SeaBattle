@@ -1,14 +1,7 @@
 import sys
 import random
-from PyQt6.QtWidgets import QGraphicsOpacityEffect
-from PyQt6.QtCore import (
-    QPropertyAnimation,
-    QEasingCurve,
-    QRect,
-    QTimer,
-    Qt,
-    QParallelAnimationGroup
-)
+
+from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, QTimer, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QApplication,
     QWidget,
@@ -17,1131 +10,694 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QVBoxLayout,
-    QMessageBox
+    QMessageBox,
+    QStackedWidget,
+    QGraphicsOpacityEffect
 )
-SIZE = 10
 
-SHIP_TYPES = {
-    4: 1,
-    3: 2,
-    2: 3,
-    1: 4
+SIZE = 10
+TURN_TIME = 60
+PLAYERS = (1, 2)
+
+SHIP_TYPES = {4: 1, 3: 2, 2: 3, 1: 4}
+
+SHIP_NAMES = {
+    1: "Однопалубный",
+    2: "Двухпалубный",
+    3: "Трёхпалубный",
+    4: "Четырёхпалубный"
 }
+
+DARK_STYLE = "QWidget { background-color: #1e1e1e; color: #e0e0e0; }"
+TITLE_STYLE = "font-size: 22px; font-weight: bold;"
+
+CELL_EMPTY = "background-color: white; border: 1px solid black;"
+CELL_SHIP = "background-color: gray; border: 1px solid black;"
+CELL_VALID = "background-color: lightgreen; border: 1px solid black;"
+CELL_INVALID = "background-color: pink; border: 1px solid black;"
+CELL_HIT = "background-color: red; border: 1px solid black;"
+CELL_MISS = "background-color: #1B56FD; color: #FFFCFB; border: 1px solid black;"
+
+SHIP_BUTTON_STYLE = """
+    QPushButton {{
+        background-color: {};
+        color: #062743;
+        font-size: 16px;
+        text-align: left;
+        padding-left: 15px;
+    }}
+"""
+
+BATTLE_PANEL_STYLE = """
+    QWidget {
+        border: 1px solid gray;
+        background: #1e1e1e;
+    }
+"""
+
+TIMER_STYLE = """
+    QLabel {
+        border: 2px solid black;
+        font-size: 28px;
+        font-weight: bold;
+        background: #1e1e1e;
+    }
+"""
+
+WIN_BUTTON_STYLE = """
+    QPushButton {
+        background-color: #d0d0d0;
+        color: #062743;
+        font-size: 20px;
+        font-weight: bold;
+    }
+    QPushButton:hover {
+        background-color: #1DCD9F;
+    }
+"""
+
+
+def make_label(text, style="", center=True):
+
+    label = QLabel(text)
+    label.setStyleSheet(style)
+
+    if center:
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+    return label
+
+
+def neighbours(x, y):
+    """Клетка и все соседние с ней клетки в пределах поля."""
+
+    return [
+        (x + dx, y + dy)
+        for dx in (-1, 0, 1)
+        for dy in (-1, 0, 1)
+        if 0 <= x + dx < SIZE and 0 <= y + dy < SIZE
+    ]
+
 
 class CellButton(QPushButton):
 
-    def __init__(self, x, y, parent):
+    def __init__(self, x, y, game):
         super().__init__()
 
-        self.x = x
-        self.y = y
-        self.parent_window = parent
+        self.cell = (x, y)
+        self.game = game
 
-        self.setFixedSize(self.parent_window.cell_size, self.parent_window.cell_size)
-        self.setSizePolicy(
-            self.sizePolicy().Policy.Fixed,
-            self.sizePolicy().Policy.Fixed
-        )
-
-        self.ships_layout = QVBoxLayout()
-        self.ships_opacity_effect = None
-        self.ships_anim = None
-
-        self.setStyleSheet("""
-            background-color: white;
-            border: 1px solid black;
-        """)
-
-        self.setMouseTracking(True)
+        self.setFixedSize(game.cell_size, game.cell_size)
+        self.setStyleSheet(CELL_EMPTY)
 
     def enterEvent(self, event):
-        self.parent_window.hover_cell(self.x, self.y)
+        self.game.hover_cell(*self.cell)
 
     def leaveEvent(self, event):
-        self.parent_window.clear_preview()
+        self.game.clear_preview()
 
     def mousePressEvent(self, event):
-        self.parent_window.cell_clicked(
-        self.x,
-        self.y
-)
+        self.game.cell_clicked(*self.cell)
 
 
 class ShipButton(QPushButton):
 
-    def __init__(self, size_ship, parent):
+    def __init__(self, size_ship, game):
         super().__init__()
 
-        self.parent_window = parent
         self.size_ship = size_ship
 
         self.setFixedHeight(60)
-        self.cell_size = 40
+        self.set_selected(False)
 
-        self.update_text()
+        self.clicked.connect(lambda: game.select_ship(self))
 
-        self.setStyleSheet("""
-            QPushButton {
-                background-color: #d0d0d0;
-                color: #062743;
-                font-size: 16px;
-                text-align: left;
-                padding-left: 15px;
-            }
-        """)
+    def update_text(self, left):
+        self.setText(f"{left} шт. | {SHIP_NAMES[self.size_ship]}")
 
-    def update_text(self):
-
-        names = {
-            1: "Однопалубный",
-            2: "Двухпалубный",
-            3: "Трёхпалубный",
-            4: "Четырёхпалубный"
-        }
-
-        left = self.parent_window.remaining_ships[self.size_ship]
-
-        self.setText(
-            f"{left} шт. | {names[self.size_ship]}"
+    def set_selected(self, selected):
+        self.setStyleSheet(
+            SHIP_BUTTON_STYLE.format("#1DCD9F" if selected else "#d0d0d0")
         )
 
-    def mousePressEvent(self, event):
-
-        if self.parent_window.remaining_ships[self.size_ship] <= 0:
-            return
-
-        self.parent_window.select_ship(self)
 
 class SeaBattle(QWidget):
+
+    game_over = pyqtSignal(int)
 
     def __init__(self):
         super().__init__()
 
-        dark_palette = """
-        QWidget { background-color: #1e1e1e; color: #e0e0e0; }
-        QGridLayout, QHBoxLayout, QVBoxLayout { background-color: #1e1e1e; }
-        /* добавь остальные нужные виджеты */
-        """
-        self.setStyleSheet(dark_palette)
-
-        self.setWindowTitle("Морской бой")
-
-        self.p1_buttons = {}
-        self.p2_buttons = {}
         self.cell_size = 40
 
-        self.p1_ships = set()
-        self.p2_ships = set()
-
-        self.p1_ship_list = []
-        self.p2_ship_list = []
-
-        self.p1_hits = set()
-        self.p2_hits = set()
-
-        self.remaining_ships = SHIP_TYPES.copy()
-
+        # всё состояние хранится по номеру игрока 1 или 2
+        self.buttons = {p: {} for p in PLAYERS}
+        self.ships = {p: set() for p in PLAYERS}
+        self.ship_list = {p: [] for p in PLAYERS}
+        self.hits = {p: set() for p in PLAYERS}
 
         self.phase = "placement"
         self.current_player = 1
         self.selected_size = None
         self.horizontal = True
         self.preview_buttons = []
-        self.turn_time = 60
-        self.timer = None
+
+        self.turn_time = TURN_TIME
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_timer)
 
         self.init_ui()
+
+    @property
+    def enemy(self):
+        return 2 if self.current_player == 1 else 1
+
+    def init_ui(self):
+
+        main = QVBoxLayout(self)
+
+        self.info = make_label("", "font-size: 24px; padding: 15px;")
+        main.addWidget(self.info)
+        main.addStretch(1)
+
+        # 3 колонки пустая поля панель кораблей
+        body = QGridLayout()
+        body.setColumnStretch(0, 1)
+        body.setColumnStretch(2, 1)
+        main.addLayout(body)
+        main.addStretch(1)
+
+        self.bottom_spacer = QWidget()
+        self.bottom_spacer.setFixedHeight(self.info.sizeHint().height())
+        main.addWidget(self.bottom_spacer)
+
+        self.battle_panel = self.create_battle_panel()
+        self.battle_panel.hide()
+        main.addWidget(self.battle_panel)
+
+        self.fields_wrapper = QWidget()
+
+        self.fields_layout = QHBoxLayout(self.fields_wrapper)
+        self.fields_layout.setSpacing(40)
+        self.fields_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.fields_layout.setContentsMargins(0, 0, 0, 0)
+
+        for player in PLAYERS:
+            self.fields_layout.addWidget(self.create_field(player))
+
+        self.ships_container = self.create_ships_panel()
+
+        body.addWidget(self.fields_wrapper, 0, 1)
+
+        body.addWidget(self.ships_container, 0, 2, Qt.AlignmentFlag.AlignRight)
+
+        self.update_info()
         self.update_cell_size()
 
-    def random_shot(self):
+    def create_field(self, player):
 
-        if self.phase != "battle":
-            return
+        container = QWidget()
+        layout = QVBoxLayout(container)
 
-        buttons = (
-            self.p2_buttons
-            if self.current_player == 1
-            else self.p1_buttons
+        layout.addWidget(make_label(f"Игрок {player}", TITLE_STYLE))
+
+        grid = QGridLayout()
+        grid.setSpacing(2)
+        grid.setContentsMargins(0, 0, 0, 0)
+        layout.addLayout(grid)
+
+        for x in range(SIZE):
+            for y in range(SIZE):
+
+                btn = CellButton(x, y, self)
+                grid.addWidget(btn, x, y)
+                self.buttons[player][(x, y)] = btn
+
+        return container
+
+    def create_ships_panel(self):
+
+        panel = QWidget()
+        panel.setFixedWidth(260)
+
+        layout = QVBoxLayout(panel)
+        layout.addWidget(make_label("Корабли", TITLE_STYLE))
+
+        self.ship_buttons = {}
+
+        for size in sorted(SHIP_TYPES, reverse=True):
+
+            self.ship_buttons[size] = ShipButton(size, self)
+            layout.addWidget(self.ship_buttons[size])
+
+        layout.addWidget(
+            make_label("\nR - повернуть корабль", "font-size: 18px;", center=False)
         )
+        layout.addStretch()
 
-        hits = (
-            self.p2_hits
-            if self.current_player == 1
-            else self.p1_hits
-        )
+        self.reset_ship_panel()
 
-        available = [
-            cell
-            for cell in buttons.keys()
-            if cell not in hits
-        ]
+        return panel
 
-        if not available:
-            return
+    def create_battle_panel(self):
 
-        x, y = random.choice(available)
+        panel = QWidget()
+        panel.setStyleSheet(BATTLE_PANEL_STYLE)
 
-        self.attack(x, y)
+        layout = QHBoxLayout(panel)
 
-    def start_turn_timer(self):
+        left_panel = QWidget()
+        left_layout = QHBoxLayout(left_panel)
 
-        self.turn_time = 60
+        random_shot_btn = QPushButton("Случайный выстрел")
+        random_shot_btn.setFixedSize(180, 50)
+        random_shot_btn.clicked.connect(self.random_shot)
+        left_layout.addWidget(random_shot_btn)
 
-        if self.timer:
-            self.timer.stop()
+        left_layout.addWidget(make_label("Осталось\nвремени:"))
 
-        self.timer = QTimer()
+        self.timer_label = make_label("01:00", TIMER_STYLE)
+        self.timer_label.setFixedSize(120, 60)
+        left_layout.addWidget(self.timer_label)
 
-        self.timer.timeout.connect(
-            self.update_timer
-        )
+        layout.addWidget(left_panel, 2)
 
-        self.timer.start(1000)
+        self.fleet_labels = {}
 
-        self.update_timer_label()
+        for player in PLAYERS:
 
-    def update_timer(self):
+            group = QWidget()
+            group_layout = QVBoxLayout(group)
 
-        self.turn_time -= 1
+            group_layout.addWidget(make_label(f"Флот {player} игрока"))
 
-        self.update_timer_label()
+            self.fleet_labels[player] = make_label("", "font-size: 18px;")
+            group_layout.addWidget(self.fleet_labels[player])
 
-        if self.turn_time <= 0:
+            layout.addWidget(group)
 
-            self.timer.stop()
+        return panel
 
-            self.switch_turn()
+    def animate(self, target, prop, start, end, duration, curve):
 
-            self.start_turn_timer()
+        anim = QPropertyAnimation(target, prop, self)
+        anim.setDuration(duration)
+        anim.setStartValue(start)
+        anim.setEndValue(end)
+        anim.setEasingCurve(curve)
+        anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
 
-    def update_timer_label(self):
-
-        minutes = self.turn_time // 60
-        seconds = self.turn_time % 60
-
-        self.timer_label.setText(
-            f"{minutes:02}:{seconds:02}"
-        )
-
-    def alive_ships_count(self, ships, hits):
-
-        visited = set()
-        alive = 0
-
-        for cell in ships:
-
-            if cell in visited:
-              continue
-
-            ship = self.get_ship_from_cell(
-                cell,
-                ships
-            )
-
-            visited.update(ship)
-
-            if not ship.issubset(hits):
-                alive += 1
-
-        return alive
-
-    def update_fleet_info(self):
-
-        player_lines = []
-        enemy_lines = []
-
-
-        for ship in sorted(
-            self.p1_ship_list,
-            key=len,
-            reverse=True
-        ):
-
-            destroyed = ship.issubset(self.p1_hits)
-
-            symbol = "⊠" if destroyed else "■"
-
-            player_lines.append(
-                symbol * len(ship)
-            )
-
-
-        for ship in sorted(
-            self.p2_ship_list,
-            key=len,
-            reverse=True
-        ):
-
-            destroyed = ship.issubset(self.p2_hits)
-
-            symbol = "⊠" if destroyed else "■"
-
-            enemy_lines.append(
-                symbol * len(ship)
-            )
-
-        self.player_fleet_label.setText(
-            " ".join(player_lines)
-        )
-
-        self.enemy_fleet_label.setText(
-            " ".join(enemy_lines)
-        )
-
-    # ПОИСК УНИЧТОЖЕННОГО КОРАБЛЯ
-    def get_ship_from_cell(self, cell, ships):
-
-        visited = set()
-        stack = [cell]
-
-        while stack:
-            c = stack.pop()
-
-            if c in visited:
-                continue
-
-            visited.add(c)
-
-            x, y = c
-
-            for nx, ny in [
-                (x - 1, y),
-                (x + 1, y),
-                (x, y - 1),
-                (x, y + 1)
-            ]:
-                if (nx, ny) in ships and (nx, ny) not in visited:
-                    stack.append((nx, ny))
-
-        return visited
-
-    def is_ship_destroyed(self, ship_cells, hits):
-
-        return ship_cells.issubset(hits)
-
-    def mark_around_ship(self, ship_cells, hits):
-
-        for x, y in ship_cells:
-
-            for dx in (-1, 0, 1):
-                for dy in (-1, 0, 1):
-
-                    nx = x + dx
-                    ny = y + dy
-
-                    if 0 <= nx < SIZE and 0 <= ny < SIZE:
-
-                        if (nx, ny) not in ship_cells:
-                            hits.add((nx, ny))
+        return anim
 
     def resizeEvent(self, event):
         self.update_cell_size()
         super().resizeEvent(event)
 
     def update_cell_size(self):
-        if not hasattr(self, "p1_buttons") or not hasattr(self, "p2_buttons"):
-            return
 
-        available = min(self.width(), self.height())
-        size = int(available / (SIZE * 2.5))
-        size = max(20, min(60, size))
+        size = int(min(self.width(), self.height()) / (SIZE * 2.5))
+        self.cell_size = max(20, min(60, size))
 
-        self.cell_size = size
-
-        for btn in list(self.p1_buttons.values()) + list(self.p2_buttons.values()):
-            btn.setFixedSize(size, size)
-
-    def animate_fields_to_center(self):
-
-        start_spacing = 40
-        end_spacing = 140
-
-        self.spacing_anim = QPropertyAnimation(
-            self.fields_layout,
-            b"spacing"
-        )
-
-        self.spacing_anim.setDuration(900)
-
-        self.spacing_anim.setStartValue(start_spacing)
-
-        self.spacing_anim.setEndValue(end_spacing)
-
-        self.spacing_anim.setEasingCurve(
-        QEasingCurve.Type.InOutCubic
-        )
-
-        self.spacing_anim.start()
-
-    # UI
-    def init_ui(self):
-
-        main = QVBoxLayout()
-        self.setLayout(main)
-
-        self.info = QLabel()
-        self.info.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        self.info.setStyleSheet("""
-            font-size: 24px;
-            padding: 15px;
-        """)
-
-        main.addWidget(self.info)
-        main.addStretch(1)
-
-        # ОСНОВНОЙ КОНТЕЙНЕР
-        body = QHBoxLayout()
-        main.addLayout(body)
-
-        # ПАНЕЛЬ БОЯ
-        self.battle_panel = QWidget()
-
-        self.battle_panel.setStyleSheet("""
-            QWidget {
-                border: 1px solid gray;
-                background: #1e1e1e;
-            }
-        """)
-
-        battle_layout = QHBoxLayout(self.battle_panel)
-
-        left_panel = QWidget()
-        left_layout = QHBoxLayout(left_panel)
-
-        self.random_shot_btn = QPushButton(
-            "Случайный выстрел"
-        )
-
-        self.random_shot_btn.setFixedSize(180, 50)
-
-        left_layout.addWidget(self.random_shot_btn)
-
-        timer_text = QLabel("Осталось\nвремени:")
-
-        timer_text.setAlignment(
-            Qt.AlignmentFlag.AlignCenter
-        )
-
-        left_layout.addWidget(timer_text)
-
-        self.timer_label = QLabel("01:00")
-
-        self.timer_label.setAlignment(
-            Qt.AlignmentFlag.AlignCenter
-        )
-
-        self.timer_label.setFixedSize(120, 60)
-
-        self.timer_label.setStyleSheet("""
-            QLabel {
-            border: 2px solid black;
-            font-size: 28px;
-            font-weight: bold;
-            background: #1e1e1e;
-            }
-        """)
-
-        left_layout.addWidget(self.timer_label)
-
-        battle_layout.addWidget(left_panel, 2)
-
-        player_group = QWidget()
-
-        player_layout = QVBoxLayout(player_group)
-
-        player_title = QLabel("Флот 1 игрока")
-        player_title.setAlignment(
-        Qt.AlignmentFlag.AlignCenter
-        )
-
-        player_layout.addWidget(player_title)
-
-        self.player_fleet_label = QLabel()
-
-        self.player_fleet_label.setAlignment(
-            Qt.AlignmentFlag.AlignCenter
-        )
-
-        self.player_fleet_label.setStyleSheet("""
-            font-size: 18px;
-        """)
-
-        player_layout.addWidget(
-            self.player_fleet_label
-        )
-
-        battle_layout.addWidget(player_group)
-
-        enemy_group = QWidget()
-
-        enemy_layout = QVBoxLayout(enemy_group)
-
-        enemy_title = QLabel("Флот 2 игрока")
-
-        enemy_title.setAlignment(
-            Qt.AlignmentFlag.AlignCenter
-        )
-
-        enemy_layout.addWidget(enemy_title)
-
-        self.enemy_fleet_label = QLabel()
-
-        self.enemy_fleet_label.setAlignment(
-            Qt.AlignmentFlag.AlignCenter
-        )
-
-        self.enemy_fleet_label.setStyleSheet("""
-            font-size: 18px;
-        """)
-
-        enemy_layout.addWidget(
-            self.enemy_fleet_label
-        )
-
-        battle_layout.addWidget(enemy_group)
-
-        self.battle_panel.hide()
-
-        main.addWidget(self.battle_panel)
-
-        # КОНТЕЙНЕР ДЛЯ ДВУХ ПОЛЕЙ
-        body.addStretch(1)
-
-        self.fields_wrapper = QWidget()
-
-        self.fields_layout = QHBoxLayout(self.fields_wrapper)
-
-        self.fields_layout.setSpacing(40)
-
-        self.fields_layout.setAlignment(
-            Qt.AlignmentFlag.AlignCenter
-        )
-
-        self.fields_layout.setContentsMargins(
-            0, 0, 0, 0
-        )
-
-        body.addWidget(self.fields_wrapper)
-        body.addStretch(1)
-
-        self.p1_container = QWidget()
-        p1_layout = QVBoxLayout(self.p1_container)
-
-        p1_title = QLabel("Игрок 1")
-        p1_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        p1_title.setStyleSheet("""
-            font-size: 22px;
-            font-weight: bold;
-            """)
-
-        p1_layout.addWidget(p1_title)
-
-        self.p1_grid = QGridLayout()
-        self.p1_grid.setSpacing(2)
-        self.p1_grid.setContentsMargins(0, 0, 0, 0)
-        p1_layout.addLayout(self.p1_grid)
-
-        self.fields_layout.addWidget(self.p1_container)
-
-        self.p2_container = QWidget()
-        p2_layout = QVBoxLayout(self.p2_container)
-
-        p2_title = QLabel("Игрок 2")
-        p2_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        p2_title.setStyleSheet("""
-        font-size: 22px;
-        font-weight: bold;
-        """)
-
-        p2_layout.addWidget(p2_title)
-
-        self.p2_grid = QGridLayout()
-        self.p2_grid.setSpacing(2)
-        self.p2_grid.setContentsMargins(0, 0, 0, 0)
-        p2_layout.addLayout(self.p2_grid)
-
-        self.fields_layout.addWidget(self.p2_container)
-
-        ships_layout = QVBoxLayout()
-
-        ships_title = QLabel("Корабли")
-        ships_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        ships_title.setStyleSheet("""
-        font-size: 22px;
-        font-weight: bold;
-        """)
-
-        ships_layout.addWidget(ships_title)
-
-        self.ship_buttons = {}
-
-        for size in [4, 3, 2, 1]:
-
-            btn = ShipButton(size, self)
-
-            ships_layout.addWidget(btn)
-
-            self.ship_buttons[size] = btn
-
-        rotate_info = QLabel("\nR - повернуть корабль")
-
-        rotate_info.setStyleSheet("""
-        font-size: 18px;
-        """)
-
-        ships_layout.addWidget(rotate_info)
-
-        ships_layout.addStretch()
-
-        self.ships_container = QWidget()
-        self.ships_container.setLayout(ships_layout)
-
-        self.ships_container.setFixedWidth(260)
-
-        body.addWidget(self.ships_container)
-
-        for x in range(SIZE):
-            for y in range(SIZE):
-
-                btn1 = CellButton(x, y, self)
-
-                self.p1_grid.addWidget(btn1, x, y)
-
-                self.p1_buttons[(x, y)] = btn1
-
-                btn2 = CellButton(x, y, self)
-
-                self.p2_grid.addWidget(btn2, x, y)
-
-                self.p2_buttons[(x, y)] = btn2
-
-        self.update_info()
-        self.update_cell_size()
-        self.random_shot_btn.clicked.connect(
-            self.random_shot
-        )
+        for buttons in self.buttons.values():
+            for btn in buttons.values():
+                btn.setFixedSize(self.cell_size, self.cell_size)
 
     def update_info(self):
 
         if self.phase == "placement":
 
-            direction = "Горизонтально"
-
-            if not self.horizontal:
-                direction = "Вертикально"
+            direction = "Горизонтально" if self.horizontal else "Вертикально"
 
             self.info.setText(
-                f"Игрок {self.current_player} расставляет корабли | "
-                f"{direction}"
+                f"Игрок {self.current_player} расставляет корабли | {direction}"
             )
 
         else:
-
-            self.info.setText(
-                f"Ход игрока {self.current_player}"
-            )
-
-    def select_ship(self, button):
-
-        self.selected_size = button.size_ship
-
-        for btn in self.ship_buttons.values():
-
-            btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #d0d0d0;
-                    color: #062743;
-                    font-size: 16px;
-                    text-align: left;
-                    padding-left: 15px;
-                }
-            """)
-
-        button.setStyleSheet("""
-            QPushButton {
-                background-color: #1DCD9F;
-                color: #062743;
-                font-size: 16px;
-                text-align: left;
-                padding-left: 15px;
-            }
-        """)
+            self.info.setText(f"Ход игрока {self.current_player}")
 
     def keyPressEvent(self, event):
 
         if event.key() == Qt.Key.Key_R:
 
             self.horizontal = not self.horizontal
-
             self.update_info()
 
-    def current_field(self):
+    def repaint_ships(self):
 
-        if self.current_player == 1:
-            return self.p1_ships
+        for player, buttons in self.buttons.items():
+            for cell, btn in buttons.items():
 
-        return self.p2_ships
+                text, style = self.cell_look(player, cell)
 
-    def current_buttons(self):
+                btn.setText(text)
+                btn.setStyleSheet(style)
 
-        if self.current_player == 1:
-            return self.p1_buttons
+    def cell_look(self, player, cell):
 
-        return self.p2_buttons
+        if self.phase == "placement":
 
+            if player == self.current_player and cell in self.ships[player]:
+                return "", CELL_SHIP
 
-    def hover_cell(self, x, y):
+            return "", CELL_EMPTY
 
-        if self.phase != "placement":
-            return
+        if cell not in self.hits[player]:
+            return "", CELL_EMPTY
 
-        if self.selected_size is None:
-            return
+        if cell in self.ships[player]:
+            return "X", CELL_HIT
 
-        self.clear_preview()
-
-        cells = self.get_ship_cells(x, y, self.selected_size)
-
-        valid = self.can_place(cells)
-
-        for cx, cy in cells:
-
-            if 0 <= cx < SIZE and 0 <= cy < SIZE:
-
-                btn = self.current_buttons()[(cx, cy)]
-
-                if valid:
-
-                    btn.setStyleSheet("""
-                        background-color: lightgreen;
-                        border: 1px solid black;
-                    """)
-
-                else:
-
-                    btn.setStyleSheet("""
-                        background-color: pink;
-                        border: 1px solid black;
-                    """)
-
-                self.preview_buttons.append(btn)
-
-    def clear_preview(self):
-
-        for btn in self.preview_buttons:
-
-            btn.setStyleSheet("""
-                background-color: white;
-                border: 1px solid black;
-            """)
-
-        self.preview_buttons.clear()
-
-        self.repaint_ships()
-
-    def get_ship_cells(self, x, y, size):
-
-        cells = []
-
-        for i in range(size):
-
-            if self.horizontal:
-                cells.append((x, y + i))
-            else:
-                cells.append((x + i, y))
-
-        return cells
-
-    def can_place(self, cells):
-
-        field = self.current_field()
-
-        for x, y in cells:
-
-            if x < 0 or y < 0:
-                return False
-
-            if x >= SIZE or y >= SIZE:
-                return False
-
-            for dx in (-1, 0, 1):
-                for dy in (-1, 0, 1):
-
-                    nx = x + dx
-                    ny = y + dy
-
-                    if (nx, ny) in field:
-                        return False
-
-        return True
+        return "•", CELL_MISS
 
     def cell_clicked(self, x, y):
 
         if self.phase == "placement":
             self.place_ship(x, y)
-            self.update_field_access()
+        else:
+            self.attack(x, y)
+
+    def reset_ship_panel(self):
+
+        self.remaining_ships = SHIP_TYPES.copy()
+
+        for size, btn in self.ship_buttons.items():
+
+            btn.setEnabled(True)
+            btn.set_selected(False)
+            btn.update_text(self.remaining_ships[size])
+
+    def select_ship(self, button):
+
+        self.selected_size = button.size_ship
+
+        for btn in self.ship_buttons.values():
+            btn.set_selected(btn is button)
+
+    def get_ship_cells(self, x, y, size):
+
+        if self.horizontal:
+            return [(x, y + i) for i in range(size)]
+
+        return [(x + i, y) for i in range(size)]
+
+    def can_place(self, cells):
+
+        field = self.ships[self.current_player]
+
+        for x, y in cells:
+
+            if not (0 <= x < SIZE and 0 <= y < SIZE):
+                return False
+
+            if any(cell in field for cell in neighbours(x, y)):
+                return False
+
+        return True
+
+    def hover_cell(self, x, y):
+
+        if self.phase != "placement" or self.selected_size is None:
             return
 
-        self.attack(x, y)
+        self.clear_preview()
+
+        cells = self.get_ship_cells(x, y, self.selected_size)
+        style = CELL_VALID if self.can_place(cells) else CELL_INVALID
+        buttons = self.buttons[self.current_player]
+
+        for cell in cells:
+
+            if cell in buttons:
+
+                buttons[cell].setStyleSheet(style)
+                self.preview_buttons.append(buttons[cell])
+
+    def clear_preview(self):
+
+        self.preview_buttons.clear()
+        self.repaint_ships()
 
     def place_ship(self, x, y):
 
-        if self.selected_size is None:
-            return
-        if self.remaining_ships[self.selected_size] <= 0:
+        size = self.selected_size
+
+        if size is None or self.remaining_ships[size] <= 0:
             return
 
-        cells = self.get_ship_cells(
-            x,
-            y,
-            self.selected_size
-        )
+        cells = self.get_ship_cells(x, y, size)
 
         if not self.can_place(cells):
             return
 
-        field = self.current_field()
+        self.ships[self.current_player].update(cells)
+        self.ship_list[self.current_player].append(set(cells))
 
-        for cell in cells:
-            field.add(cell)
-
-        if self.current_player == 1:
-            self.p1_ship_list.append(set(cells))
-        else:
-            self.p2_ship_list.append(set(cells))
-
-        self.remaining_ships[self.selected_size] -= 1
-
-        self.ship_buttons[self.selected_size].update_text()
-
-        if self.remaining_ships[self.selected_size] <= 0:
-
-            self.ship_buttons[self.selected_size].setEnabled(False)
-
-        self.repaint_ships()
+        self.remaining_ships[size] -= 1
+        self.ship_buttons[size].update_text(self.remaining_ships[size])
+        self.ship_buttons[size].setEnabled(self.remaining_ships[size] > 0)
 
         self.clear_preview()
 
-        if all(v == 0 for v in self.remaining_ships.values()):
+        if any(self.remaining_ships.values()):
+            return
 
-            if self.current_player == 1:
+        self.selected_size = None
 
-                QMessageBox.information(
-                    self,
-                    "Игрок 2",
-                    "Теперь игрок 2 расставляет корабли"
-                )
+        if self.current_player == 1:
 
-                self.current_player = 2
-                self.update_info()
+            QMessageBox.information(
+                self,
+                "Игрок 2",
+                "Теперь игрок 2 расставляет корабли"
+            )
 
-                self.update_field_access()
-                self.repaint_ships()
-
-                self.remaining_ships = SHIP_TYPES.copy()
-
-                for size in self.ship_buttons:
-
-                    self.ship_buttons[size].setEnabled(True)
-                    self.ship_buttons[size].update_text()
-
-                self.selected_size = None
-
-                self.repaint_ships()
-
-            else:
-
-                self.selected_size = None
-
-                QMessageBox.information(
-                    self,
-                    "Бой",
-                    "Все корабли расставлены!")
-
-                self.hide_ships_panel_and_start_game()
-
-                self.update_info()
-
-    def clear_board_visual(self):
-
-        for btn in self.p1_buttons.values():
-
-            btn.setText("")
-
-            btn.setStyleSheet("""
-                background-color: white;
-                border: 1px solid black;
-            """)
-
-        for btn in self.p2_buttons.values():
-
-            btn.setText("")
-
-            btn.setStyleSheet("""
-                background-color: white;
-                border: 1px solid black;
-            """)
-
-    def repaint_ships(self):
-
-        self.clear_board_visual()
-
-        if self.phase == "placement":
-
-            if self.current_player == 1:
-
-                for x, y in self.p1_ships:
-
-                    self.p1_buttons[(x, y)].setStyleSheet("""
-                        background-color: gray;
-                        border: 1px solid black;
-                    """)
-
-            else:
-
-                for x, y in self.p2_ships:
-
-                    self.p2_buttons[(x, y)].setStyleSheet("""
-                        background-color: gray;
-                        border: 1px solid black;
-                    """)
+            self.current_player = 2
+            self.reset_ship_panel()
+            self.update_info()
+            self.repaint_ships()
 
         else:
 
-            for x, y in self.p1_hits:
+            QMessageBox.information(self, "Бой", "Все корабли расставлены!")
 
-                btn = self.p1_buttons[(x, y)]
+            self.start_battle()
 
-                if (x, y) in self.p1_ships:
+    def start_battle(self):
 
-                    btn.setText("X")
+        effect = QGraphicsOpacityEffect(self.ships_container)
+        self.ships_container.setGraphicsEffect(effect)
 
-                    btn.setStyleSheet("""
-                        background-color: red;
-                        border: 1px solid black;
-                    """)
+        anim = self.animate(
+            effect, b"opacity", 1.0, 0.0, 700, QEasingCurve.Type.InOutQuad
+        )
+        anim.finished.connect(self.on_ships_panel_hidden)
 
-                else:
+    def on_ships_panel_hidden(self):
 
-                    btn.setText("•")
+        self.ships_container.hide()
+        self.bottom_spacer.hide()
+        self.phase = "battle"
 
-                    btn.setStyleSheet("""
-                        background-color: #1B56FD;
-                        color: #FFFCFB;
-                        border: 1px solid black;
-                    """)
+        self.current_player = random.choice(PLAYERS)
 
-            for x, y in self.p2_hits:
+        self.battle_panel.show()
 
-                btn = self.p2_buttons[(x, y)]
+        self.animate(
+            self.fields_layout, b"spacing", 40, 140, 900,
+            QEasingCurve.Type.InOutCubic
+        )
 
-                if (x, y) in self.p2_ships:
-
-                    btn.setText("X")
-
-                    btn.setStyleSheet("""
-                        background-color: red;
-                        border: 1px solid black;
-                    """)
-
-                else:
-
-                    btn.setText("•")
-
-                    btn.setStyleSheet("""
-                        background-color: #1B56FD;
-                        color: #FFFCFB;
-                        border: 1px solid black;
-                    """)
-
-    def attack(self, x, y):
-
-        if self.phase != "battle":
-            return
-
-        enemy = 2 if self.current_player == 1 else 1
-
-        if enemy == 2:
-
-            if (x, y) in self.p2_hits:
-                return
-
-            self.p2_hits.add((x, y))
-
-            btn = self.p2_buttons[(x, y)]
-
-            if (x, y) in self.p2_ships:
-
-                ship = self.get_ship_from_cell(
-                    (x, y),
-                    self.p2_ships
-                )
-
-                if self.is_ship_destroyed(ship, self.p2_hits):
-                    self.mark_around_ship(ship, self.p2_hits)
-
-                btn.setText("X")
-
-                btn.setStyleSheet("""
-                    background-color: red;
-                    border: 1px solid black;
-                """)
-
-            else:
-
-                btn.setText("•")
-
-                btn.setStyleSheet("""
-                    background-color: #1B56FD;
-                    color: #FFFCFB;
-                    border: 1px solid black;
-                """)
-
-                self.switch_turn()
-                self.update_field_access()
-
-        else:
-
-            if (x, y) in self.p1_hits:
-                return
-
-            self.p1_hits.add((x, y))
-
-            btn = self.p1_buttons[(x, y)]
-
-            if (x, y) in self.p1_ships:
-
-                ship = self.get_ship_from_cell(
-                (x, y),
-                self.p1_ships
-                )
-
-                if self.is_ship_destroyed(ship, self.p1_hits):
-                    self.mark_around_ship(ship, self.p1_hits)
-
-                btn.setText("X")
-
-                btn.setStyleSheet("""
-                background-color: red;
-                border: 1px solid black;
-                """)
-
-            else:
-
-                btn.setText("•")
-
-                btn.setStyleSheet("""
-                    background-color: #1B56FD;
-                    color: #FFFCFB;
-                    border: 1px solid black;
-                """)
-
-                self.switch_turn()
-
-        if self.check_win():
-            return
-
-        self.repaint_ships()
-
-        self.update_info()
-
-    def switch_turn(self):
-
-        self.current_player = 2 if self.current_player == 1 else 1
-        self.update_field_access()
         self.start_turn_timer()
         self.update_fleet_info()
+        self.update_info()
+        self.update_field_access()
+        self.repaint_ships()
+
+    def start_turn_timer(self):
+
+        self.turn_time = TURN_TIME
+        self.update_timer_label()
+        self.timer.start(1000)
+
+    def update_timer(self):
+
+        self.turn_time -= 1
+        self.update_timer_label()
+
+        if self.turn_time <= 0:
+            self.switch_turn()
+
+    def update_timer_label(self):
+
+        minutes, seconds = divmod(self.turn_time, 60)
+        self.timer_label.setText(f"{minutes:02}:{seconds:02}")
+
+    def update_fleet_info(self):
+
+        for player, label in self.fleet_labels.items():
+
+            ships = sorted(self.ship_list[player], key=len, reverse=True)
+
+            label.setText(" ".join(
+                ("⊠" if ship <= self.hits[player] else "■") * len(ship)
+                for ship in ships
+            ))
 
     def update_field_access(self):
 
         if self.phase == "placement":
             return
 
-        if self.current_player == 1:
+        for player, buttons in self.buttons.items():
+            for btn in buttons.values():
+                btn.setEnabled(player != self.current_player)
 
-            for btn in self.p1_buttons.values():
-                btn.setEnabled(False)
+    def switch_turn(self):
 
-            for btn in self.p2_buttons.values():
-                btn.setEnabled(True)
+        self.current_player = self.enemy
+
+        self.update_field_access()
+        self.start_turn_timer()
+        self.update_fleet_info()
+        self.update_info()
+
+    def random_shot(self):
+
+        if self.phase != "battle":
+            return
+
+        hits = self.hits[self.enemy]
+        available = [cell for cell in self.buttons[self.enemy] if cell not in hits]
+
+        if available:
+            self.attack(*random.choice(available))
+
+    def attack(self, x, y):
+
+        if self.phase != "battle":
+            return
+
+        shooter = self.current_player
+        enemy = self.enemy
+        cell = (x, y)
+        hits = self.hits[enemy]
+
+        if cell in hits:
+            return
+
+        hits.add(cell)
+
+        if cell in self.ships[enemy]:
+
+            ship = next(s for s in self.ship_list[enemy] if cell in s)
+
+            if ship <= hits:
+                for sx, sy in ship:
+                    hits.update(c for c in neighbours(sx, sy) if c not in ship)
 
         else:
+            self.switch_turn()
 
-            for btn in self.p2_buttons.values():
-                btn.setEnabled(False)
+        if self.ships[enemy] <= hits:
+            self.finish_game(shooter)
+            return
 
-            for btn in self.p1_buttons.values():
-                btn.setEnabled(True)
+        self.update_fleet_info()
+        self.repaint_ships()
+        self.update_info()
 
-    def check_win(self):
+    def finish_game(self, winner):
 
-        if self.p2_ships.issubset(self.p2_hits):
+        self.phase = "finished"
+        self.timer.stop()
+        self.game_over.emit(winner)
 
-            QMessageBox.information(
-                self,
-                "Победа",
-                "Игрок 1 победил!"
-            )
 
-            QApplication.quit()
-            return True
+class WinScreen(QWidget):
 
-        if self.p1_ships.issubset(self.p1_hits):
+    restart_clicked = pyqtSignal()
+    exit_clicked = pyqtSignal()
 
-            QMessageBox.information(
-                self,
-                "Победа",
-                "Игрок 2 победил!"
-            )
+    def __init__(self):
+        super().__init__()
 
-            QApplication.quit()
-            return True
+        main = QVBoxLayout(self)
+        main.addStretch(1)
 
-        return False
+        self.winner_label = make_label(
+            "", "font-size: 48px; font-weight: bold; color: #1DCD9F;"
+        )
+        main.addWidget(self.winner_label)
+        main.addSpacing(40)
 
-    def hide_ships_panel_and_start_game(self):
+        buttons = QHBoxLayout()
+        buttons.setSpacing(30)
+        buttons.addStretch(1)
 
-        self.ships_opacity_effect = QGraphicsOpacityEffect()
-        self.ships_container.setGraphicsEffect(self.ships_opacity_effect)
+        for text, signal in (
+            ("Начать заново", self.restart_clicked),
+            ("Выход", self.exit_clicked)
+        ):
 
-        self.ships_anim = QPropertyAnimation(self.ships_opacity_effect, b"opacity")
-        self.ships_anim.setDuration(700)
-        self.ships_anim.setStartValue(1)
-        self.ships_anim.setEndValue(0)
-        self.ships_anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
+            btn = QPushButton(text)
+            btn.setFixedSize(220, 60)
+            btn.setStyleSheet(WIN_BUTTON_STYLE)
+            btn.clicked.connect(signal)
 
-        def finish():
+            buttons.addWidget(btn)
 
-            self.ships_container.hide()
-            self.phase = "battle"
-            
-            self.battle_panel.show()
-            self.update_fleet_info()
-            self.start_turn_timer()
+        buttons.addStretch(1)
 
-            self.animate_fields_to_center()
+        main.addLayout(buttons)
+        main.addStretch(1)
 
-            self.update_info()
-            self.update_field_access()
-            self.update_field_access()
-            self.repaint_ships()
+    def set_winner(self, player):
+        self.winner_label.setText(f"Победил игрок {player}!")
 
-        self.ships_anim.finished.connect(finish)
-        self.ships_anim.start()
+
+class MainWindow(QStackedWidget):
+
+    def __init__(self):
+        super().__init__()
+
+        self.setStyleSheet(DARK_STYLE)
+        self.setWindowTitle("Морской бой")
+
+        self.game = None
+
+        self.win_screen = WinScreen()
+        self.win_screen.restart_clicked.connect(self.start_new_game)
+        self.win_screen.exit_clicked.connect(QApplication.quit)
+        self.addWidget(self.win_screen)
+
+        self.start_new_game()
+
+    def start_new_game(self):
+
+        if self.game is not None:
+            self.removeWidget(self.game)
+            self.game.deleteLater()
+
+        self.game = SeaBattle()
+        self.game.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.game.game_over.connect(self.show_winner)
+
+        self.addWidget(self.game)
+        self.setCurrentWidget(self.game)
+        self.game.setFocus()
+
+    def show_winner(self, player):
+
+        self.win_screen.set_winner(player)
+        self.setCurrentWidget(self.win_screen)
 
 
 if __name__ == "__main__":
 
     app = QApplication(sys.argv)
-
     app.setStyle("Fusion")
 
-    window = SeaBattle()
-
+    window = MainWindow()
     window.show()
 
     sys.exit(app.exec())
